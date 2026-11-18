@@ -1,0 +1,7 @@
+/vendor/
+/.phpunit.cache/
+/.phpcs-cache
+/build/
+*.vec
+*.vec.lock
+.DS_Store

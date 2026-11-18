@@ -1,0 +1,47 @@
+{
+    "name": "indianopinion/post-embeddings",
+    "description": "WordPress plugin: one embedding per post in the background, a packed sidecar for fast scans, related-posts and semantic search blocks, and a capped backfill.",
+    "type": "wordpress-plugin",
+    "license": "MIT",
+    "keywords": ["wordpress", "embeddings", "related-posts", "semantic-search", "vectors"],
+    "homepage": "https://github.com/IndianOpinion/post-embeddings",
+    "support": {
+        "issues": "https://github.com/IndianOpinion/post-embeddings/issues",
+        "source": "https://github.com/IndianOpinion/post-embeddings"
+    },
+    "authors": [
+        {"name": "Indian Opinion", "email": "hello@indianopinion.org"}
+    ],
+    "repositories": [
+        {"type": "vcs", "url": "https://github.com/IndianOpinion/packed-vectors"}
+    ],
+    "require": {
+        "php": ">=8.1",
+        "indianopinion/packed-vectors": "^0.1.0"
+    },
+    "require-dev": {
+        "php-stubs/wordpress-stubs": "^6.9",
+        "php-stubs/wp-cli-stubs": "^2.12",
+        "phpstan/phpstan": "^2.0",
+        "phpunit/phpunit": "^10.5",
+        "squizlabs/php_codesniffer": "^3.10"
+    },
+    "autoload": {
+        "psr-4": {"IndianOpinion\\PostEmbeddings\\": "src/"}
+    },
+    "autoload-dev": {
+        "psr-4": {"IndianOpinion\\PostEmbeddings\\Tests\\": "tests/"}
+    },
+    "scripts": {
+        "test": "phpunit",
+        "stan": "phpstan analyse --memory-limit=1G",
+        "cs": "phpcs",
+        "check": ["@cs", "@stan", "@test"]
+    },
+    "config": {
+        "sort-packages": true,
+        "platform": {"php": "8.1.0"}
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
