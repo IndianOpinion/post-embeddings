@@ -1,0 +1,24 @@
+{
+    "$schema": "https://schemas.wp.org/trunk/block.json",
+    "apiVersion": 3,
+    "name": "post-embeddings/related",
+    "title": "Related posts (embeddings)",
+    "category": "widgets",
+    "icon": "networking",
+    "description": "Posts that are about the same thing as this one, by embedding similarity.",
+    "keywords": ["related", "similar", "embeddings"],
+    "textdomain": "post-embeddings",
+    "attributes": {
+        "count": {"type": "integer", "default": 4},
+        "postTypes": {"type": "array", "items": {"type": "string"}, "default": []},
+        "heading": {"type": "string", "default": "Related"},
+        "showDate": {"type": "boolean", "default": true},
+        "showExcerpt": {"type": "boolean", "default": false},
+        "showImage": {"type": "boolean", "default": true},
+        "fallback": {"type": "string", "enum": ["none", "recent", "same_term"], "default": "none"},
+        "minScore": {"type": "string", "default": ""}
+    },
+    "supports": {"html": false, "align": ["wide", "full"]},
+    "usesContext": ["postId", "postType"],
+    "editorScript": "post-embeddings-editor"
+}

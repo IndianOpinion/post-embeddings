@@ -1,0 +1,20 @@
+{
+    "$schema": "https://schemas.wp.org/trunk/block.json",
+    "apiVersion": 3,
+    "name": "post-embeddings/search",
+    "title": "Semantic search",
+    "category": "widgets",
+    "icon": "search",
+    "description": "A search box that finds posts by meaning, with keyword results as the fallback.",
+    "keywords": ["search", "semantic", "embeddings"],
+    "textdomain": "post-embeddings",
+    "attributes": {
+        "count": {"type": "integer", "default": 10},
+        "label": {"type": "string", "default": "Search"},
+        "buttonText": {"type": "string", "default": "Search"},
+        "showDate": {"type": "boolean", "default": true},
+        "showExcerpt": {"type": "boolean", "default": true}
+    },
+    "supports": {"html": false, "align": ["wide", "full"]},
+    "editorScript": "post-embeddings-editor"
+}
