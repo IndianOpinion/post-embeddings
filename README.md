@@ -79,7 +79,7 @@ Settings live in Tools, Post embeddings. Every default passes through `post_embe
 | `enabled` | on | Kill switch. Off means no provider call of any kind; related posts keep serving from stored vectors. `POST_EMBEDDINGS_DISABLED` set to `true` wins. |
 | `search_enabled` | on | Turns off only search query embeddings (search then shows keyword results). |
 | `post_types` | `post` | Post types to embed. Adding one embeds nothing until you run a backfill. |
-| `base_url`, `model`, `dimensions`, `api_key` | empty | The HTTP adapter. `base_url` must be https; plain http is allowed for `localhost` and `127.0.0.1` only. |
+| `base_url`, `model`, `dimensions`, `api_key` | empty | The HTTP adapter. `base_url` must be https to a public host; plain http is allowed for `localhost` and `127.0.0.1` only. Remote calls go through the WordPress safe-URL check (ports 80, 443 and 8080 unless `http_allowed_safe_ports` widens them). Changing the host clears a stored key. |
 | `max_input_chars` | 8000 | Text is cut at a whitespace boundary to this many characters. |
 | `max_batch` | 64 | Inputs per provider call. |
 | `send_dimensions` | off | Send `"dimensions"` in the request, for models that take it. |
@@ -136,7 +136,7 @@ Actions: `post_embeddings_stored( $post_id, $model_key )`, `post_embeddings_fail
 
 REST, under `post-embeddings/v1`: `GET /related/<id>?count=` (public, published posts only, 404 otherwise), `GET /search?q=&count=` (public, rate-limited, returns `{"mode": "semantic"|"keyword", "results": [...]}`), `GET /status` (manage capability). Scores appear only for users with the manage capability.
 
-**Spend meter.** When a callback is hooked on `spend_meter_pre_spend`, each provider call first asks it with purpose `post-embeddings.index` or `post-embeddings.query`. A decision whose `allowed` is not exactly `true` means no call. The plugin then fires `spend_meter_record` with the `reservation_id`, or `spend_meter_release` when the call did not happen. With no meter, the plugin's own caps apply; they always apply anyway.
+**Spend meter.** When spend-meter (contract `SPEND_METER_API` = 1) or another callback answers `spend_meter_pre_spend`, each provider call first asks it with an intent array: purpose `post-embeddings.index` or `post-embeddings.query`, `caller`, `provider`, `model` and `est_input_tokens`. A decision whose `allowed` is not exactly `true` means no call. Every attempt is then reported with one `spend_meter_record` call array carrying the `reservation_id`, status (`ok`, `error_billed` or `error_unbilled`) and token usage; a reservation for a call that did not happen is given back with `spend_meter_release`. A `null` decision means no meter. The plugin's own caps and kill switch apply either way.
 
 **Your own provider.** Implement `IndianOpinion\PostEmbeddings\Provider\EmbeddingProvider` (`id`, `model`, `dimensions`, `maxInputChars`, `maxBatch`, `embed`) and return it from `post_embeddings_provider`. Throw only the plugin's `ProviderError` exceptions for provider problems. `FakeProvider` gives deterministic vectors from a hash for tests and local development: **its results are not semantic.** See [`examples/`](examples).
 
@@ -150,7 +150,7 @@ wp post-embeddings search "<text>"        # counts against the query cap
 wp post-embeddings retry --errors | resume | prune --model=<key> [--yes] | kill on|off
 ```
 
-`backfill` refuses to run without `--cap` and refuses a cap above `backfill_cap_ceiling`. It stops with exit code 0 and a message when a cap or the kill switch stops it; `--resume` carries on from the stored cursor. Ctrl-C between batches loses nothing. Every command exits non-zero on failure.
+`backfill` refuses to run without `--cap` and refuses a cap above `backfill_cap_ceiling`. It stops with exit code 0 and a message when a cap or the kill switch stops it; `--resume` carries on from the stored cursor. Ctrl-C between batches loses nothing. A backfill holds the drain lock while it runs, so it refuses to start (exit 1, nothing sent) while a drain is running; try again a minute later. Every command exits non-zero on failure.
 
 ## Keeping the sidecar private
 

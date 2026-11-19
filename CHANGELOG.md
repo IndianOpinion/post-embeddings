@@ -4,7 +4,7 @@ All notable changes are documented here. The format follows [Keep a Changelog](h
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-11-18
+## [0.1.0] - 2026-11-19
 
 ### Added
 
@@ -15,7 +15,9 @@ All notable changes are documented here. The format follows [Keep a Changelog](h
 - Semantic search block, shortcode, PHP function and REST route, with a cached query vector, per-client rate limit and keyword fallback.
 - Opt-in reordering of core search results.
 - WP-CLI: `backfill` (required cap, resumable, dry run), `drain`, `status`, `rebuild`, `verify`, `related`, `search`, `retry`, `resume`, `prune`, `kill`.
-- Daily post, token and query caps; kill switch setting and constant; optional spend meter integration.
+- Daily post, token and query caps counted atomically, so racing processes cannot overshoot them; kill switch setting and constant; optional spend-meter integration (contract 1: intent array, one record per attempt, release by reservation id).
+- Backfill and drain share one lock; the backfill run cap counts every post sent, billed or not.
+- Adapter URL guard: no private or reserved targets, remote calls through the WordPress safe-URL check, and a stored key cleared when the host changes.
 - Reference HTTP adapter for the common embeddings request shape, and a deterministic fake adapter for tests.
 - Status screen under Tools, Site Health tests, privacy-policy text, uninstall and multisite site cleanup.
 

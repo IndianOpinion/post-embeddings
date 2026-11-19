@@ -843,6 +843,20 @@ To be answered by the builder in `docs/ARCHITECTURE.md`.
    base URL enough for self-hosted models, or should a separate adapter for
    a local inference server's own request shape ship too?
 
+### Decision recorded at build: drain versus backfill
+
+The builder answered one question this PRD left open between cases 5, 12
+and 63, and it is recorded here as part of the contract. The drain sends
+rows that are already `pending` and nothing else: after a model change or a
+newly added post type, nothing is embedded on its own. New saves become
+pending under the current model key, and the archive moves only through an
+explicit `backfill` within its `--cap` and the daily caps. The rule is
+"only saves and explicit backfills spend money". The two share the drain
+lock: a backfill holds it for its whole run, so the same pending row is
+never sent by both at once, and a backfill started while a drain runs exits
+non-zero without sending. The rulings on the questions above are in
+`docs/ARCHITECTURE.md`.
+
 ## 14. Lessons from production (the traps, as rules)
 
 1. **Never compare vectors of different lengths.** A cosine that loops to
