@@ -9,18 +9,24 @@ use IndianOpinion\PostEmbeddings\Logger;
 use IndianOpinion\PostEmbeddings\Settings;
 
 /**
- * Daily cap counters in one option, keyed by UTC date. A new date resets
- * them on read, so a missed cron can never leave a cap stuck.
+ * Daily cap counters keyed by UTC date. A new date starts from zero on read,
+ * so a missed cron can never leave a cap stuck. The counts live in a
+ * CounterBackend (atomic options rows in production); the once-a-day cap
+ * notes live in one option.
  */
 final class Counters
 {
     public const OPTION = 'post_embeddings_counters';
 
+    private readonly CounterBackend $backend;
+
     public function __construct(
         private readonly Settings $settings,
         private readonly Clock $clock,
-        private readonly Logger $logger
+        private readonly Logger $logger,
+        ?CounterBackend $backend = null
     ) {
+        $this->backend = $backend ?? new OptionCounterBackend();
     }
 
     public function today(): string
@@ -35,19 +41,9 @@ final class Counters
      */
     public function usage(): array
     {
-        $raw = get_option(self::OPTION, []);
-        $raw = is_array($raw) ? $raw : [];
-        if (($raw['date'] ?? null) !== $this->today()) {
-            return ['date' => $this->today(), 'index_posts' => 0, 'index_tokens' => 0, 'queries' => 0, 'noted' => []];
-        }
+        $today = $this->today();
 
-        return [
-            'date' => $this->today(),
-            'index_posts' => (int) ($raw['index_posts'] ?? 0),
-            'index_tokens' => (int) ($raw['index_tokens'] ?? 0),
-            'queries' => (int) ($raw['queries'] ?? 0),
-            'noted' => is_array($raw['noted'] ?? null) ? array_map('boolval', $raw['noted']) : [],
-        ];
+        return ['date' => $today] + $this->backend->read($today) + ['noted' => $this->noted()];
     }
 
     /**
@@ -81,19 +77,59 @@ final class Counters
         return max(0, $this->settings->int('daily_query_cap') - $this->usage()['queries']);
     }
 
+    /**
+     * Counts posts and tokens against today's indexing caps before a call,
+     * atomically: the counters move first and are given back when the total
+     * crosses a cap, so two processes racing near a cap can both be refused
+     * but can never both overshoot it.
+     *
+     * @phpstan-impure
+     */
+    public function claimIndex(int $posts, int $tokens): bool
+    {
+        $deltas = ['index_posts' => max(0, $posts), 'index_tokens' => max(0, $tokens)];
+        $after = $this->backend->add($this->today(), $deltas);
+        $tokenCap = $this->settings->int('daily_token_cap');
+        if (
+            $after['index_posts'] > $this->settings->int('daily_post_cap')
+            || ($tokenCap > 0 && $after['index_tokens'] > $tokenCap)
+        ) {
+            $this->backend->add($this->today(), array_map(static fn (int $n): int => -$n, $deltas));
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /** Gives back a claim for a call that was not made or not billed. */
+    public function releaseIndex(int $posts, int $tokens): void
+    {
+        $this->backend->add($this->today(), ['index_posts' => -max(0, $posts), 'index_tokens' => -max(0, $tokens)]);
+    }
+
+    /** Counts one fresh query embedding before the call, atomically (see claimIndex). */
+    public function claimQuery(): bool
+    {
+        $after = $this->backend->add($this->today(), ['queries' => 1]);
+        if ($after['queries'] > $this->settings->int('daily_query_cap')) {
+            $this->backend->add($this->today(), ['queries' => -1]);
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /** Adds to the indexing counters; a negative token count corrects an estimate downwards. */
     public function addIndex(int $posts, int $tokens): void
     {
-        $u = $this->usage();
-        $u['index_posts'] += max(0, $posts);
-        $u['index_tokens'] += max(0, $tokens);
-        update_option(self::OPTION, $u, false);
+        $this->backend->add($this->today(), ['index_posts' => max(0, $posts), 'index_tokens' => $tokens]);
     }
 
     public function addQuery(): void
     {
-        $u = $this->usage();
-        $u['queries']++;
-        update_option(self::OPTION, $u, false);
+        $this->backend->add($this->today(), ['queries' => 1]);
     }
 
     /**
@@ -102,14 +138,27 @@ final class Counters
      */
     public function noteCapReached(string $which, int $limit): void
     {
-        $u = $this->usage();
-        if (!empty($u['noted'][$which])) {
+        $noted = $this->noted();
+        if (!empty($noted[$which])) {
             return;
         }
-        $u['noted'][$which] = true;
-        update_option(self::OPTION, $u, false);
+        $raw = get_option(self::OPTION, []);
+        $raw = is_array($raw) && ($raw['date'] ?? null) === $this->today() ? $raw : ['date' => $this->today()];
+        $raw['noted'] = [$which => true] + $noted;
+        update_option(self::OPTION, $raw, false);
         $code = $which === 'kill_switch' ? 'kill_switch' : 'cap_reached_' . $which;
-        $this->logger->warning($code, ['limit' => $limit, 'date' => $u['date']]);
+        $this->logger->warning($code, ['limit' => $limit, 'date' => $this->today()]);
         do_action('post_embeddings_cap_reached', $which, $limit);
+    }
+
+    /** @return array<string, bool> */
+    private function noted(): array
+    {
+        $raw = get_option(self::OPTION, []);
+        if (!is_array($raw) || ($raw['date'] ?? null) !== $this->today() || !is_array($raw['noted'] ?? null)) {
+            return [];
+        }
+
+        return array_map('boolval', $raw['noted']);
     }
 }

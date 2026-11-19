@@ -9,6 +9,7 @@ use IndianOpinion\PostEmbeddings\Clock;
 use IndianOpinion\PostEmbeddings\ModelKey;
 use IndianOpinion\PostEmbeddings\Posts\Eligibility;
 use IndianOpinion\PostEmbeddings\Posts\PostSource;
+use IndianOpinion\PostEmbeddings\Provider\EmbeddingProvider;
 use IndianOpinion\PostEmbeddings\Provider\ProviderResolver;
 use IndianOpinion\PostEmbeddings\Settings;
 use IndianOpinion\PostEmbeddings\Sidecar\Sidecar;
@@ -41,7 +42,8 @@ final class Backfill
         private readonly Sidecar $sidecar,
         private readonly Settings $settings,
         private readonly State $state,
-        private readonly Clock $clock
+        private readonly Clock $clock,
+        private readonly DrainLock $lock
     ) {
         $this->out = static function (string $line): void {
         };
@@ -71,8 +73,31 @@ final class Backfill
         if ($o['dry_run']) {
             return $this->dryRun($o, $key, $cursor, $provider->maxInputChars());
         }
+        if (!$this->lock->acquire()) {
+            // The drain (or another backfill) holds the lock and may be sending
+            // the same pending rows: running now could pay for them twice.
+            $out('Error: a drain or another backfill is running. Try again in a minute.');
+
+            return 1;
+        }
+        try {
+            return $this->send($o, $key, $cursor, $provider);
+        } finally {
+            $this->lock->release();
+        }
+    }
+
+    /**
+     * The sending loop, run under the drain lock.
+     *
+     * @param array{cap: int, types: list<string>, order: string, since: ?string, batch: int, dry_run: bool, resume: bool} $o
+     */
+    private function send(array $o, string $key, int $cursor, EmbeddingProvider $provider): int
+    {
+        $out = $this->out;
         $sent = 0;
         $storedTotal = 0;
+        $changedTotal = 0;
         $batchNo = 0;
         $size = max(1, min($o['batch'], $provider->maxBatch()));
         $message = 'Done: nothing left to embed.';
@@ -99,6 +124,7 @@ final class Backfill
             }
             $want = min($size, $capLeft, $postsLeft);
             [$items, $cursor, $exhausted, $changed] = $this->collect($o, $key, $cursor, $want);
+            $changedTotal += $changed;
             $tokensLeft = $this->counters->tokensLeft();
             if ($tokensLeft !== null) {
                 $kept = [];
@@ -130,15 +156,29 @@ final class Backfill
                 }
                 continue;
             }
+            if (!$this->lock->refresh()) {
+                $message = 'Stopped: the lock was lost to another process.';
+                break;
+            }
             $outcome = $this->embedder->run($provider, $items);
             $batchNo++;
-            $sent += $outcome->sent;
+            // The run cap counts every post handed to the provider, billed or
+            // not, so a run of rejected inputs cannot walk past --cap.
+            $sent += $outcome->attempted;
             $storedTotal += $outcome->stored;
+            if ($outcome->stop !== null) {
+                // Posts after the stop were never sent and have no row that
+                // anything else would pick up: resume from the first of them.
+                $unsent = $this->firstUnsettled($items, $key);
+                if ($unsent !== null) {
+                    $cursor = $this->cursorBefore($unsent, $o['order']);
+                }
+            }
             $this->saveCursor($o, $cursor);
             $out(sprintf(
                 'Batch %d: sent %d, stored %d, errors %d, retry later %d, daily cap left %d, run cap left %d.',
                 $batchNo,
-                $outcome->sent,
+                $outcome->attempted,
                 $outcome->stored,
                 $outcome->errors,
                 $outcome->retried,
@@ -153,7 +193,7 @@ final class Backfill
                 break;
             }
         }
-        if ($storedTotal > 0) {
+        if ($storedTotal > 0 || $changedTotal > 0) {
             $this->sidecar->queueRebuild();
         }
         $out(sprintf('%s Sent %d, stored %d.', $message, $sent, $storedTotal));
@@ -192,8 +232,22 @@ final class Backfill
                 $text = $this->text->build($post);
                 $hash = EmbeddingText::hash($text, $key);
                 $row = $this->store->get($id, $key);
-                if ($row !== null && $row->status === IndexRow::OK && $row->textHash === $hash) {
-                    continue;
+                if ($row !== null && $row->textHash === $hash) {
+                    if ($row->status === IndexRow::OK) {
+                        continue;
+                    }
+                    if ($row->status === IndexRow::ERROR) {
+                        // Same text failed before: only `retry --errors` sends it again (case 26).
+                        continue;
+                    }
+                    if ($row->status === IndexRow::INELIGIBLE && $row->vector !== null && $row->embeddedAt !== null) {
+                        // Published again with unchanged text: back to ok without a call (case 3).
+                        $row->status = IndexRow::OK;
+                        $row->updatedAt = $this->clock->now();
+                        $this->store->save($row);
+                        $changed++;
+                        continue;
+                    }
                 }
                 if (EmbeddingText::isEmpty($text, $minChars)) {
                     if ($row === null || $row->status !== IndexRow::EMPTY || $row->textHash !== $hash) {
@@ -247,7 +301,11 @@ final class Backfill
                     continue;
                 }
                 $row = $this->store->get($id, $key);
-                if ($row !== null && $row->status === IndexRow::OK && $row->textHash === EmbeddingText::hash($text, $key)) {
+                if (
+                    $row !== null && $row->textHash === EmbeddingText::hash($text, $key)
+                    && ($row->status === IndexRow::OK || $row->status === IndexRow::ERROR
+                        || ($row->status === IndexRow::INELIGIBLE && $row->vector !== null && $row->embeddedAt !== null))
+                ) {
                     continue;
                 }
                 if ($count < $max) {
@@ -298,6 +356,24 @@ final class Backfill
     private function saveCursor(array $o, int $cursor): void
     {
         $this->state->set('backfill', ['signature' => self::signature($o), 'cursor' => $cursor, 'at' => $this->clock->now()]);
+    }
+
+    /**
+     * The first item the embedder left untouched: no stored row, a stored
+     * row for other text, or a row still marked ineligible.
+     *
+     * @param list<Item> $items
+     */
+    private function firstUnsettled(array $items, string $key): ?int
+    {
+        foreach ($items as $item) {
+            $stored = $this->store->get($item->row->postId, $key);
+            if ($stored === null || $stored->textHash !== $item->row->textHash || $stored->status === IndexRow::INELIGIBLE) {
+                return $item->row->postId;
+            }
+        }
+
+        return null;
     }
 
     private function cursorBefore(int $postId, string $order): int

@@ -144,15 +144,18 @@ final class Embedder
     }
 
     /**
-     * Asks the meter, makes the call, and counts it. Returns null when the
-     * meter says no (the caller stops). A call that may have been billed is
-     * counted even when it fails.
+     * Asks the meter, claims the posts and tokens against the daily caps
+     * (atomically, so racing processes cannot overshoot), makes the call,
+     * and settles both. Returns null when the meter or a cap says no (the
+     * caller stops). A call that may have been billed stays counted even
+     * when it fails; one that was certainly not billed is given back.
      *
      * @param list<string> $texts
      */
     private function call(EmbeddingProvider $provider, array $texts, BatchOutcome $out): ?EmbeddingResult
     {
         $estimate = $this->tokens->estimateAll($texts);
+        $posts = count($texts);
         $reservation = $this->meter->reserve('index', $provider->id(), $provider->model(), $estimate);
         if (!$reservation->allowed) {
             $this->counters->noteCapReached('spend_meter', 0);
@@ -160,9 +163,8 @@ final class Embedder
 
             return null;
         }
-        $tokensLeft = $this->counters->tokensLeft();
-        if ($this->counters->postsLeft() < count($texts) || ($tokensLeft !== null && $tokensLeft < $estimate)) {
-            // The budget moved while the meter was asked (another process
+        if (!$this->counters->claimIndex($posts, $estimate)) {
+            // The budget moved since the batch was sized (another process
             // spent it): give the reservation back and stop.
             $this->meter->release($reservation);
             $out->stop = 'cap';
@@ -170,30 +172,41 @@ final class Embedder
             return null;
         }
         $out->calls++;
+        $out->attempted += $posts;
         try {
             $result = $provider->embed($texts);
         } catch (TransientProviderError | AuthProviderError | InputTooLongError | RejectedInputError $e) {
             $billed = $e instanceof TransientProviderError && $e->maybeBilled;
+            $status = $e instanceof TransientProviderError || $e instanceof AuthProviderError || $e instanceof RejectedInputError
+                ? $e->httpStatus : 0;
             if ($billed) {
-                $this->counters->addIndex(count($texts), $estimate);
-                $out->sent += count($texts);
+                $out->sent += $posts;
+            } else {
+                $this->counters->releaseIndex($posts, $estimate);
             }
-            $this->meter->record($reservation, 'error', $billed ? $estimate : 0);
+            $this->meter->record(
+                $reservation,
+                $billed ? 'error_billed' : 'error_unbilled',
+                $billed ? $estimate : 0,
+                $status,
+                (new \ReflectionClass($e))->getShortName()
+            );
 
             throw $e;
         } catch (\Throwable $e) {
             // An adapter that broke its contract: count it as spent, retry later.
-            $this->counters->addIndex(count($texts), $estimate);
-            $out->sent += count($texts);
-            $this->meter->record($reservation, 'error', $estimate);
+            $out->sent += $posts;
+            $this->meter->record($reservation, 'error_billed', $estimate, null, 'provider_contract');
             $this->logger->error('provider_contract', ['class' => get_class($e)]);
 
             throw new TransientProviderError('Adapter threw ' . get_class($e), null, true);
         }
         $used = $result->inputTokens ?? $estimate;
-        $this->counters->addIndex(count($texts), $used);
-        $this->meter->record($reservation, 'ok', $used);
-        $out->sent += count($texts);
+        if ($used !== $estimate) {
+            $this->counters->addIndex(0, $used - $estimate);
+        }
+        $this->meter->record($reservation, 'ok', $used, $result->httpStatus);
+        $out->sent += $posts;
         $out->tokens += $used;
 
         return $result;

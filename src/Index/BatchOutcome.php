@@ -7,7 +7,10 @@ namespace IndianOpinion\PostEmbeddings\Index;
 /** What one batch did. `stop` names why the caller must stop, if it must. */
 final class BatchOutcome
 {
+    /** Posts that were billed or may have been billed. */
     public int $sent = 0;
+    /** Posts handed to the provider, billed or not. */
+    public int $attempted = 0;
     public int $stored = 0;
     public int $errors = 0;
     public int $retried = 0;
@@ -18,6 +21,7 @@ final class BatchOutcome
     public function merge(self $other): void
     {
         $this->sent += $other->sent;
+        $this->attempted += $other->attempted;
         $this->stored += $other->stored;
         $this->errors += $other->errors;
         $this->retried += $other->retried;

@@ -7,6 +7,7 @@ namespace IndianOpinion\PostEmbeddings;
 use IndianOpinion\PostEmbeddings\Index\Drain;
 use IndianOpinion\PostEmbeddings\Index\DrainLock;
 use IndianOpinion\PostEmbeddings\Budget\Counters;
+use IndianOpinion\PostEmbeddings\Budget\WpdbCounterBackend;
 use IndianOpinion\PostEmbeddings\Sidecar\Directory;
 use IndianOpinion\PostEmbeddings\Sidecar\Sidecar;
 use IndianOpinion\PostEmbeddings\Store\Schema;
@@ -50,6 +51,7 @@ final class Uninstaller
         $like = [
             $this->db->esc_like('_transient_' . Cache::PREFIX) . '%',
             $this->db->esc_like('_transient_timeout_' . Cache::PREFIX) . '%',
+            $this->db->esc_like(WpdbCounterBackend::PREFIX) . '%',
         ];
         foreach ($like as $pattern) {
             $this->db->query((string) $this->db->prepare('DELETE FROM %i WHERE option_name LIKE %s', $this->db->options, $pattern));

@@ -7,6 +7,7 @@ namespace IndianOpinion\PostEmbeddings;
 use IndianOpinion\PostEmbeddings\Admin\Screen;
 use IndianOpinion\PostEmbeddings\Budget\Counters;
 use IndianOpinion\PostEmbeddings\Budget\SpendGate;
+use IndianOpinion\PostEmbeddings\Budget\WpdbCounterBackend;
 use IndianOpinion\PostEmbeddings\Cli\Command;
 use IndianOpinion\PostEmbeddings\Front\Hooks;
 use IndianOpinion\PostEmbeddings\Front\RelatedRenderer;
@@ -102,7 +103,14 @@ final class Plugin
         $this->eligibility = new Eligibility($this->settings);
         $this->text = new EmbeddingText();
         $this->tokens = new TokenEstimator();
-        $this->counters = new Counters($this->settings, $this->clock, $this->logger);
+        // Production (no injected store) counts in atomic options rows; tests
+        // that inject their own store keep the counters in one option.
+        $this->counters = new Counters(
+            $this->settings,
+            $this->clock,
+            $this->logger,
+            $store === null && $wpdb instanceof \wpdb ? new WpdbCounterBackend($wpdb) : null
+        );
         $this->meter = new SpendGate();
         $this->directory = new Directory();
         $this->sidecar = new Sidecar($this->directory, $this->store, $this->eligibility, $this->state, $this->clock, $this->logger);
@@ -152,7 +160,8 @@ final class Plugin
             $this->sidecar,
             $this->settings,
             $this->state,
-            $this->clock
+            $this->clock,
+            new DrainLock($this->clock)
         );
         $this->ranker = new HitRanker($this->eligibility, $this->store);
         $this->related = new Related(
