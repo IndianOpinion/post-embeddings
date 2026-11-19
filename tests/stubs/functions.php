@@ -376,6 +376,17 @@ function wp_remote_post(string $url, array $args = []): array|WP_Error
     return (WpStub::$http)($url, $args);
 }
 
+/**
+ * Records that the safe-URL guard was asked for, then answers like
+ * wp_remote_post().
+ *
+ * @return array<string, mixed>|WP_Error
+ */
+function wp_safe_remote_post(string $url, array $args = []): array|WP_Error
+{
+    return wp_remote_post($url, $args + ['reject_unsafe_urls' => true]);
+}
+
 /** @return array<string, mixed>|WP_Error */
 function wp_remote_get(string $url, array $args = []): array|WP_Error
 {

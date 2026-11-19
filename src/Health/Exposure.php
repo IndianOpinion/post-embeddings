@@ -11,7 +11,8 @@ use IndianOpinion\PostEmbeddings\State;
 /**
  * Asks the site, over HTTP, for a file in the sidecar directory (case 81).
  * Results: `not_public` (outside the document root), `blocked` (any answer
- * but 200), `exposed` (200), `unknown` (the request failed).
+ * but 200 or a redirect), `exposed` (200), `unknown` (the request failed,
+ * was redirected, or there was no file in the directory to ask for).
  */
 final class Exposure
 {
@@ -33,16 +34,24 @@ final class Exposure
         ) {
             return (string) $cached['result'];
         }
-        $name = $sidecarFile !== null && is_file($this->directory->path() . '/' . $sidecarFile) ? $sidecarFile : Directory::PROBE;
+        $dir = $this->directory->path();
+        $name = $sidecarFile !== null && is_file($dir . '/' . $sidecarFile) ? $sidecarFile : Directory::PROBE;
         $url = $this->directory->urlFor($name);
         if ($url === null) {
             $result = 'not_public';
+        } elseif (!is_file($dir . '/' . $name)) {
+            // Nothing to fetch: a 404 would prove nothing about the deny
+            // rule. Report it as unverified rather than private.
+            $result = 'unknown';
         } else {
             $response = wp_remote_get($url, ['timeout' => 5, 'redirection' => 0, 'limit_response_size' => 256]);
             if (is_wp_error($response)) {
                 $result = 'unknown';
             } else {
-                $result = (int) wp_remote_retrieve_response_code($response) === 200 ? 'exposed' : 'blocked';
+                $code = (int) wp_remote_retrieve_response_code($response);
+                // A redirect (for example http to https) says nothing about
+                // whether the file can be downloaded at its final address.
+                $result = $code === 200 ? 'exposed' : ($code >= 300 && $code < 400 ? 'unknown' : 'blocked');
             }
         }
         $this->state->set('exposure', ['result' => $result, 'at' => $this->clock->now()]);

@@ -58,6 +58,11 @@ final class Directory
     public function protect(): ?string
     {
         $dir = $this->path();
+        if (!self::isAbsolute($dir)) {
+            // A relative path would follow the working directory of whatever
+            // process runs the build: refuse rather than write vectors there.
+            return 'directory_not_absolute';
+        }
         if (!is_dir($dir) && !wp_mkdir_p($dir)) {
             return 'directory_missing';
         }
@@ -110,10 +115,44 @@ final class Directory
         return null;
     }
 
+    public static function isAbsolute(string $path): bool
+    {
+        return str_starts_with($path, '/') || preg_match('#^[A-Za-z]:[/\\\\]#', $path) === 1;
+    }
+
+    /**
+     * The resolved path, or for a path that does not exist yet its deepest
+     * existing parent resolved plus the rest, so a directory that has not
+     * been created is still placed correctly against the document root.
+     */
     private function real(string $path): ?string
     {
         $real = realpath($path);
+        if ($real !== false) {
+            return rtrim($real, '/\\');
+        }
+        $rest = [];
+        $current = rtrim($path, '/\\');
+        while ($current !== '' && $current !== '.' && $current !== dirname($current)) {
+            $rest[] = basename($current);
+            $current = dirname($current);
+            $base = realpath($current);
+            if ($base !== false) {
+                $out = explode('/', rtrim($base, '/\\'));
+                foreach (array_reverse($rest) as $part) {
+                    if ($part === '..') {
+                        if (count($out) > 1) {
+                            array_pop($out);
+                        }
+                    } elseif ($part !== '' && $part !== '.') {
+                        $out[] = $part;
+                    }
+                }
 
-        return $real === false ? null : rtrim($real, '/\\');
+                return implode('/', $out);
+            }
+        }
+
+        return null;
     }
 }

@@ -242,11 +242,20 @@ final class Settings
                 $errors[] = 'The model name must be 1 to 128 printable ASCII characters without spaces.';
             }
         }
+        $newKey = false;
         if (array_key_exists('api_key', $input)) {
             $key = trim((string) $input['api_key']);
             if ($key !== '') {
                 $out['api_key'] = $key;
+                $newKey = true;
             }
+        }
+        $oldHost = strtolower((string) parse_url((string) $current['base_url'], PHP_URL_HOST));
+        $newHost = strtolower((string) parse_url((string) $out['base_url'], PHP_URL_HOST));
+        if (!$newKey && $oldHost !== '' && $oldHost !== $newHost && is_string($out['api_key']) && $out['api_key'] !== '') {
+            // A stored key only ever goes to the host it was saved for.
+            $out['api_key'] = '';
+            $errors[] = 'The base URL host changed, so the stored API key was cleared. Enter the key for the new host.';
         }
 
         return [$out, $errors];

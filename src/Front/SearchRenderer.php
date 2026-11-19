@@ -63,7 +63,7 @@ final class SearchRenderer
         $html .= self::hiddenInputs($param);
         $html .= '<label class="post-embeddings-search__label" for="' . esc_attr($id) . '">' . esc_html($attrs['label']) . '</label>';
         $html .= '<input class="post-embeddings-search__input" type="search" id="' . esc_attr($id) . '" name="' . esc_attr($param)
-            . '" value="' . esc_attr($value === null ? '' : Search::normaliseQuery($value)) . '" minlength="' . Search::MIN_LEN
+            . '" value="' . esc_attr(self::shown($value)) . '" minlength="' . Search::MIN_LEN
             . '" maxlength="' . Search::MAX_LEN . '" required>';
         $html .= '<button class="post-embeddings-search__button" type="submit">' . esc_html($attrs['buttonText']) . '</button>';
         $html .= '</form>';
@@ -108,6 +108,16 @@ final class SearchRenderer
         }
 
         return $html . '</div>';
+    }
+
+    /** The query echoed back into the field: normalised and never longer than the field allows. */
+    private static function shown(?string $value): string
+    {
+        if ($value === null) {
+            return '';
+        }
+
+        return mb_substr(Search::normaliseQuery(substr($value, 0, Search::MAX_RAW_BYTES)), 0, Search::MAX_LEN, 'UTF-8');
     }
 
     private static function action(): string

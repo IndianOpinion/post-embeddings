@@ -40,12 +40,21 @@ final class HttpEmbeddingProvider implements EmbeddingProvider, TimeoutAware
         }
     }
 
+    /** Hosts reached over plain http, and without the private-address guard. */
+    public const LOCAL_HOSTS = ['localhost', '127.0.0.1'];
+
     /**
-     * Null when the URL is acceptable: https with a host, or plain http only
-     * to localhost or 127.0.0.1.
+     * Null when the URL is acceptable: https with a public host, or http or
+     * https to localhost or 127.0.0.1 for a self-hosted model. No
+     * credentials, query or fragment, and no literal private, loopback or
+     * reserved address other than 127.0.0.1 (the request itself also goes
+     * through the WordPress safe-URL check, which resolves the name).
      */
     public static function validateBaseUrl(string $url): ?string
     {
+        if (preg_match('/[\x00-\x20\x7f\\\\]/', $url) === 1) {
+            return 'The base URL must not contain spaces, control characters or backslashes.';
+        }
         $parts = parse_url($url);
         if (!is_array($parts) || !isset($parts['scheme'], $parts['host']) || $parts['host'] === '') {
             return 'The base URL must be an absolute URL with a host.';
@@ -53,16 +62,32 @@ final class HttpEmbeddingProvider implements EmbeddingProvider, TimeoutAware
         if (isset($parts['user']) || isset($parts['pass'])) {
             return 'The base URL must not carry credentials.';
         }
+        if (isset($parts['query']) || isset($parts['fragment'])) {
+            return 'The base URL must not carry a query string or fragment.';
+        }
         $scheme = strtolower($parts['scheme']);
         $host = strtolower($parts['host']);
-        if ($scheme === 'https') {
+        if (self::isLocalHost($host) && ($scheme === 'http' || $scheme === 'https')) {
             return null;
         }
-        if ($scheme === 'http' && in_array($host, ['localhost', '127.0.0.1'], true)) {
-            return null;
+        if ($scheme !== 'https') {
+            return 'The base URL must use https (plain http is allowed only for localhost and 127.0.0.1).';
+        }
+        $ip = trim($host, '[]');
+        if (filter_var($ip, FILTER_VALIDATE_IP) !== false) {
+            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+                return 'The base URL must not point at a private, loopback or reserved address (only localhost and 127.0.0.1 are allowed).';
+            }
+        } elseif (preg_match('/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.?$/', $host) !== 1) {
+            return 'The base URL host is not a valid host name.';
         }
 
-        return 'The base URL must use https (plain http is allowed only for localhost and 127.0.0.1).';
+        return null;
+    }
+
+    public static function isLocalHost(string $host): bool
+    {
+        return in_array(strtolower($host), self::LOCAL_HOSTS, true);
     }
 
     public function id(): string
@@ -121,14 +146,22 @@ final class HttpEmbeddingProvider implements EmbeddingProvider, TimeoutAware
             $headers['Authorization'] = 'Bearer ' . $this->apiKey;
         }
         $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-        $response = wp_remote_post(rtrim($this->baseUrl, '/') . '/embeddings', [
+        $url = rtrim($this->baseUrl, '/') . '/embeddings';
+        $args = [
             'headers' => $headers,
             'body' => $body,
             'timeout' => $this->timeout,
             'sslverify' => true,
             'redirection' => 0,
             'data_format' => 'body',
-        ]);
+        ];
+        // A remote provider goes through the safe-URL check, which resolves
+        // the host and refuses private and reserved addresses at request
+        // time (no SSRF through DNS). Only the two local hosts skip it.
+        $host = parse_url($this->baseUrl, PHP_URL_HOST);
+        $response = is_string($host) && self::isLocalHost($host)
+            ? wp_remote_post($url, $args)
+            : wp_safe_remote_post($url, $args);
         if (is_wp_error($response)) {
             $message = $response->get_error_message();
             $timedOut = preg_match('/timed? ?out|cURL error 28/i', $message) === 1;
@@ -142,7 +175,7 @@ final class HttpEmbeddingProvider implements EmbeddingProvider, TimeoutAware
         $status = (int) wp_remote_retrieve_response_code($response);
         $raw = (string) wp_remote_retrieve_body($response);
         if ($status === 401 || $status === 403) {
-            throw new AuthProviderError(sprintf('Provider refused the credentials (HTTP %d).', $status));
+            throw new AuthProviderError(sprintf('Provider refused the credentials (HTTP %d).', $status), $status);
         }
         if ($status === 429 || $status >= 500) {
             $header = wp_remote_retrieve_header($response, 'retry-after');

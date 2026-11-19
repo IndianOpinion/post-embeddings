@@ -73,12 +73,14 @@ final class Logger
      */
     public static function redact(string $body, int $bytes = 300): string
     {
-        $body = substr($body, 0, $bytes);
+        // Redact before cutting, so a credential that straddles the cut is
+        // still recognised whole.
+        $body = substr($body, 0, max($bytes, 8192));
         $body = (string) preg_replace('/bearer\s+[A-Za-z0-9._~+\/=-]+/i', 'Bearer [redacted]', $body);
         $body = (string) preg_replace('/(authorization|api[-_]?key|x-api-key|token|secret)("?\s*[:=]\s*"?)[^",\s}]+/i', '$1$2[redacted]', $body);
         $body = (string) preg_replace('/\b(sk|pk|rk|key)[-_][A-Za-z0-9_-]{8,}/', '[redacted]', $body);
         $body = (string) preg_replace('/[A-Za-z0-9_-]{32,}/', '[redacted]', $body);
-        $body = mb_scrub($body, 'UTF-8');
+        $body = mb_scrub(substr($body, 0, $bytes), 'UTF-8');
 
         return (string) preg_replace('/[\x00-\x1f\x7f]+/', ' ', $body);
     }
