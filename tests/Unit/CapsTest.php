@@ -105,8 +105,8 @@ final class CapsTest extends TestCase
     {
         $records = [];
         $releases = [];
-        add_action('spend_meter_record', static function ($id, array $data) use (&$records): void {
-            $records[] = [$id, $data];
+        add_action('spend_meter_record', static function (array $call) use (&$records): void {
+            $records[] = $call;
         });
         add_action('spend_meter_release', static function ($id) use (&$releases): void {
             $releases[] = $id;
@@ -126,7 +126,8 @@ final class CapsTest extends TestCase
         self::assertSame('post-embeddings', $requests[0]['caller']);
         self::assertSame('test', $requests[0]['provider']);
         self::assertSame('test-model', $requests[0]['model']);
-        self::assertGreaterThan(0, $requests[0]['estimated_input_tokens']);
+        self::assertGreaterThan(0, $requests[0]['est_input_tokens']);
+        self::assertSame(['purpose', 'caller', 'provider', 'model', 'est_input_tokens'], array_keys($requests[0]));
 
         $decision = ['allowed' => 'yes'];
         $this->plugin->drain->run();
@@ -135,8 +136,13 @@ final class CapsTest extends TestCase
         $decision = ['allowed' => true, 'reservation_id' => 'r1'];
         $this->plugin->drain->run();
         self::assertCount(1, $this->provider->calls);
-        self::assertSame('r1', $records[0][0]);
-        self::assertSame('ok', $records[0][1]['status']);
+        self::assertSame('r1', $records[0]['reservation_id']);
+        self::assertSame('ok', $records[0]['status']);
+        self::assertSame('post-embeddings.index', $records[0]['purpose']);
+        self::assertSame('post-embeddings', $records[0]['caller']);
+        self::assertSame('test', $records[0]['provider']);
+        self::assertSame('test-model', $records[0]['model']);
+        self::assertIsInt($records[0]['input_tokens']);
         self::assertCount(1, $records);
         self::assertSame(IndexRow::OK, $this->rowOf($a)?->status);
 

@@ -9,9 +9,13 @@ use IndianOpinion\PostEmbeddings\Budget\Counters;
 use IndianOpinion\PostEmbeddings\Budget\SpendGate;
 use IndianOpinion\PostEmbeddings\Cache;
 use IndianOpinion\PostEmbeddings\Logger;
+use IndianOpinion\PostEmbeddings\Provider\AuthProviderError;
 use IndianOpinion\PostEmbeddings\Provider\EmbeddingProvider;
+use IndianOpinion\PostEmbeddings\Provider\ProviderError;
 use IndianOpinion\PostEmbeddings\Provider\ProviderResolver;
+use IndianOpinion\PostEmbeddings\Provider\RejectedInputError;
 use IndianOpinion\PostEmbeddings\Provider\TimeoutAware;
+use IndianOpinion\PostEmbeddings\Provider\TransientProviderError;
 use IndianOpinion\PostEmbeddings\Settings;
 use IndianOpinion\PostEmbeddings\Sidecar\VectorScan;
 use IndianOpinion\PostEmbeddings\Store\IndexStore;
@@ -31,6 +35,8 @@ final class Search
     public const MAX_LEN = 200;
     public const VECTOR_TTL = 604800;
     public const TIMEOUT = 5;
+    /** Raw input longer than this many bytes is refused before any processing. */
+    public const MAX_RAW_BYTES = 4096;
 
     public function __construct(
         private readonly IndexStore $store,
@@ -64,6 +70,9 @@ final class Search
      */
     public function search(string $raw, int $count = 10, array $server = []): SearchOutcome
     {
+        if (strlen($raw) > self::MAX_RAW_BYTES) {
+            return new SearchOutcome('invalid', [], '', 'length');
+        }
         $query = self::normaliseQuery($raw);
         $count = max(1, min(20, $count));
         if (!self::valid($query)) {
@@ -149,22 +158,30 @@ final class Search
         if (!$reservation->allowed) {
             return 'spend_meter';
         }
-        if ($this->counters->queriesLeft() < 1) {
+        if (!$this->counters->claimQuery()) {
+            // Counted atomically: racing requests near the cap cannot overshoot it.
             $this->meter->release($reservation);
+            $this->counters->noteCapReached('queries', $this->settings->int('daily_query_cap'));
 
             return 'cap_queries';
         }
         $caller = $provider instanceof TimeoutAware ? $provider->withTimeout(self::TIMEOUT) : $provider;
-        $this->counters->addQuery();
         try {
             $result = $caller->embed([$query]);
         } catch (\Throwable $e) {
-            $this->meter->record($reservation, 'error', $estimate);
-            $this->logger->warning('search_provider', ['class' => (new \ReflectionClass($e))->getShortName()]);
+            // Counted against the query cap whatever happened: a timeout may
+            // still be billed, and under-counting is the dangerous direction.
+            $billed = !$e instanceof ProviderError
+                || ($e instanceof TransientProviderError && $e->maybeBilled);
+            $status = $e instanceof TransientProviderError || $e instanceof AuthProviderError || $e instanceof RejectedInputError
+                ? $e->httpStatus : 0;
+            $short = (new \ReflectionClass($e))->getShortName();
+            $this->meter->record($reservation, $billed ? 'error_billed' : 'error_unbilled', $billed ? $estimate : 0, $status, $short);
+            $this->logger->warning('search_provider', ['class' => $short]);
 
             return 'provider_error';
         }
-        $this->meter->record($reservation, 'ok', $result->inputTokens ?? $estimate);
+        $this->meter->record($reservation, 'ok', $result->inputTokens ?? $estimate, $result->httpStatus);
         $vector = $result->vector(0);
         if (VectorMath::problem($vector, $provider->dimensions()) !== null) {
             return 'bad_vector';
