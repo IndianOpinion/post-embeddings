@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<ruleset name="post-embeddings">
+    <description>PSR-12 for the plugin and its tests.</description>
+    <arg name="extensions" value="php"/>
+    <arg name="cache" value=".phpcs-cache"/>
+    <arg name="colors"/>
+    <arg value="sp"/>
+    <file>src</file>
+    <file>tests</file>
+    <file>post-embeddings.php</file>
+    <file>functions.php</file>
+    <file>uninstall.php</file>
+    <file>examples</file>
+    <rule ref="PSR12">
+        <exclude name="Generic.Files.LineLength"/>
+    </rule>
+    <rule ref="PSR1.Files.SideEffects">
+        <exclude-pattern>post-embeddings.php</exclude-pattern>
+        <exclude-pattern>uninstall.php</exclude-pattern>
+        <exclude-pattern>functions.php</exclude-pattern>
+        <exclude-pattern>src/autoload.php</exclude-pattern>
+        <exclude-pattern>examples/*</exclude-pattern>
+        <exclude-pattern>tests/phpstan-bootstrap.php</exclude-pattern>
+    </rule>
+    <!-- WordPress names (get_results, _real_escape) are kept in the stubs. -->
+    <rule ref="PSR1.Methods.CamelCapsMethodName.NotCamelCaps">
+        <exclude-pattern>tests/stubs/*</exclude-pattern>
+        <exclude-pattern>tests/Unit/UninstallTest.php</exclude-pattern>
+    </rule>
+    <rule ref="PSR2.Methods.MethodDeclaration.Underscore">
+        <exclude-pattern>tests/stubs/*</exclude-pattern>
+    </rule>
+    <rule ref="Squiz.Classes.ValidClassName.NotCamelCaps">
+        <exclude-pattern>tests/stubs/*</exclude-pattern>
+    </rule>
+    <rule ref="PSR1.Classes.ClassDeclaration.MissingNamespace">
+        <exclude-pattern>tests/stubs/*</exclude-pattern>
+    </rule>
+    <rule ref="PSR1.Classes.ClassDeclaration.MultipleClasses">
+        <exclude-pattern>tests/*</exclude-pattern>
+    </rule>
+</ruleset>
